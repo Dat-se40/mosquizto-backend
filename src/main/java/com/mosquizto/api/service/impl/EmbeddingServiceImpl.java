@@ -30,41 +30,36 @@ public class EmbeddingServiceImpl implements EmbeddingService {
     @Override
     @EventListener(ApplicationReadyEvent.class)
     public void init() {
+        if (getClass().getResource("/models/model.onnx") == null
+                || getClass().getResource("/models/tokenizer.json") == null) {
+            log.warn("[EmbeddingService] ONNX model is not on the classpath. Recommendation embedding stays off and the server keeps running.");
+            return;
+        }
+
         try {
             log.info("[EmbeddingService] Loading ONNX model...");
             long startTime = System.currentTimeMillis();
 
-            // Load ONNX model
-            log.info("[EmbeddingService] Creating OrtEnvironment...");
             env = OrtEnvironment.getEnvironment();
 
             log.info("[EmbeddingService] Reading model.onnx from classpath...");
             try (InputStream is = getClass().getResourceAsStream("/models/model.onnx")) {
-                if (is == null) {
-                    throw new RuntimeException("model.onnx not found in classpath!");
-                }
                 byte[] modelBytes = is.readAllBytes();
                 log.info("[EmbeddingService] model.onnx size: {} bytes", modelBytes.length);
-
-                log.info("[EmbeddingService] Creating OrtSession...");
                 session = env.createSession(modelBytes, new OrtSession.SessionOptions());
             }
 
-            // Load tokenizer từ local file
             log.info("[EmbeddingService] Loading tokenizer.json...");
             Path tokenizerPath = Paths.get(
                     getClass().getResource("/models/tokenizer.json").toURI()
             );
-            log.info("[EmbeddingService] Tokenizer path: {}", tokenizerPath);
             tokenizer = HuggingFaceTokenizer.newInstance(tokenizerPath);
 
             isInitialized = true;
             long elapsed = System.currentTimeMillis() - startTime;
-            log.info("[EmbeddingService] ✅ ONNX model loaded successfully in {}ms", elapsed);
-
+            log.info("[EmbeddingService] ONNX model loaded in {}ms", elapsed);
         } catch (Exception e) {
-            log.error("[EmbeddingService] ❌ Failed to initialize ONNX model", e);
-            throw new RuntimeException("Failed to initialize EmbeddingService: " + e.getMessage(), e);
+            log.error("[EmbeddingService] Failed to initialize ONNX model. Recommendation embedding stays off.", e);
         }
     }
 

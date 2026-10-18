@@ -3,6 +3,7 @@ package com.mosquizto.api.service.impl;
 import com.mosquizto.api.mapper.CollectionMapper;
 import com.mosquizto.api.model.Collection;
 import com.mosquizto.api.model.User;
+import com.mosquizto.api.model.UserCollection;
 import com.mosquizto.api.repository.CollectionRepository;
 import com.mosquizto.api.repository.UserCollectionRepository;
 import com.mosquizto.api.service.*;

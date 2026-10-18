@@ -34,7 +34,10 @@ services:
     restart: unless-stopped
 
   app:
-    build: .
+    build:
+      context: .
+      args:
+        INCLUDE_EMBEDDING_MODEL: ${INCLUDE_EMBEDDING_MODEL:-false}
     container_name: mosquizto_app
     ports:
       - "8080:8080"
