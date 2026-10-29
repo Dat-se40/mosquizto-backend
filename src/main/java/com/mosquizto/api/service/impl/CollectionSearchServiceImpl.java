@@ -13,7 +13,11 @@ import com.mosquizto.api.service.CollectionSearchService;
 import com.mosquizto.api.util.matching.TextMatcherResolver;
 import com.mosquizto.api.util.matching.TextMatcherType;
 import com.mosquizto.api.util.matching.TextNormalizer;
-import jakarta.annotation.PostConstruct;
+import com.meilisearch.sdk.model.TaskInfo;
+import com.meilisearch.sdk.model.TaskStatus;
+import com.meilisearch.sdk.model.DocumentsQuery;
+import com.meilisearch.sdk.exceptions.MeilisearchApiException;
+import org.springframework.beans.factory.annotation.Value;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -42,38 +46,50 @@ public class CollectionSearchServiceImpl implements CollectionSearchService {
     private final Client meiliClient;
     private final CollectionRepository collectionRepository;
     private final TextMatcherResolver textMatcherResolver;
+    @Value("${sync.store-timeout-seconds:60}")
+    private int timeoutSeconds = 60;
+    private volatile boolean configured;
 
     @Override
-    @PostConstruct
-    public void configureIndex() {
+    public synchronized void configureIndex() {
+        if (configured) {
+            return;
+        }
         Index index = meiliClient.index(INDEX);
 
-        index.updateSearchableAttributesSettings(
+        await(index.updateSearchableAttributesSettings(
                 new String[]{"title", "description", "titleNgrams", "descriptionNgrams"}
-        );
+        ));
 
-        index.updateFilterableAttributesSettings(
+        await(index.updateFilterableAttributesSettings(
                 new String[]{"visibility", "createdByUsername", "count"}
-        );
+        ));
 
-        index.updateSortableAttributesSettings(
+        await(index.updateSortableAttributesSettings(
                 new String[]{"count"}
-        );
+        ));
+        configured = true;
     }
 
     @Override
     public void upsert(Collection collection) {
-        CollectionDocument doc = toDocument(collection);
-        meiliClient.index(INDEX).addDocuments(GSON.toJson(List.of(doc)), "id");
+        upsertBatch(List.of(collection));
+    }
+
+    public void upsertBatch(List<Collection> collections) {
+        configureIndex();
+        List<CollectionDocument> docs = collections.stream().map(this::toDocument).toList();
+        await(meiliClient.index(INDEX).addDocuments(GSON.toJson(docs), "id"));
     }
 
     @Override
     public void delete(Integer id) {
-        meiliClient.index(INDEX).deleteDocument(String.valueOf(id));
+        await(meiliClient.index(INDEX).deleteDocument(String.valueOf(id)));
     }
 
     @Override
     public SearchResultPaginated search(String query, int page, int pageSize, String createdByUsername) {
+        configureIndex();
         String filter = buildFilter(createdByUsername);
         SearchResultPaginated primaryResult = executeSearch(
                 buildPrimarySearchRequest(query, page, pageSize, filter)
@@ -96,34 +112,26 @@ public class CollectionSearchServiceImpl implements CollectionSearchService {
         return "visibility = true";
     }
 
-    @Override
-    public void reindexAll() {
-        log.info("Starting lazy reindex for Meilisearch...");
-        configureIndex();
+    private void await(TaskInfo submitted) {
+        Index index = meiliClient.index(INDEX);
+        index.waitForTask(submitted.getTaskUid(), timeoutSeconds * 1000, 100);
+        if (index.getTask(submitted.getTaskUid()).getStatus() != TaskStatus.SUCCEEDED) {
+            throw new IllegalStateException("Meilisearch task " + submitted.getTaskUid() + " did not succeed");
+        }
+    }
 
-        int page = 0;
-        int pageSize = 500;
-        long totalIndexed = 0;
-        org.springframework.data.domain.Page<Collection> collectionPage;
-
-        do {
-            collectionPage = collectionRepository.findAllActive(
-                    org.springframework.data.domain.PageRequest.of(page, pageSize));
-
-            if (collectionPage.hasContent()) {
-                List<CollectionDocument> docs = collectionPage.getContent().stream()
-                        .map(this::toDocument)
-                        .toList();
-                meiliClient.index(INDEX).addDocuments(GSON.toJson(docs), "id");
-
-                totalIndexed += docs.size();
-                log.info("Indexed batch: page {}, size {}", page, docs.size());
+    public List<Integer> listIds(int offset, int limit) {
+        try {
+            var result = meiliClient.index(INDEX).getDocuments(new DocumentsQuery()
+                    .setOffset(offset).setLimit(limit).setFields(new String[]{"id"}), Map.class);
+            return java.util.Arrays.stream(result.getResults())
+                    .map(doc -> ((Number) doc.get("id")).intValue()).toList();
+        } catch (MeilisearchApiException e) {
+            if ("index_not_found".equals(e.getCode())) {
+                return List.of();
             }
-
-            page++;
-        } while (collectionPage.hasNext());
-
-        log.info("Total reindexed {} collections to Meilisearch", totalIndexed);
+            throw e;
+        }
     }
 
     private CollectionDocument toDocument(Collection collection) {

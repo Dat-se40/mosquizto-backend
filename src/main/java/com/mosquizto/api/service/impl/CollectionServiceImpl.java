@@ -22,6 +22,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
+import java.util.Objects;
 
 @Service
 @RequiredArgsConstructor
@@ -98,11 +99,15 @@ public class CollectionServiceImpl implements CollectionService {
 
         membershipResolver.requireCanEdit(collection, user);
 
+        String previousTitle = collection.getTitle();
+        String previousDescription = collection.getDescription();
+        Boolean previousVisibility = collection.getVisibility();
         this.collectionMapper.updateEntity(collection, request);
         var updatedCollection = collectionRepository.save(collection);
         collectionSearchService.upsert(updatedCollection);
-        if(!collection.getDescription().equals(request.getDescription())
-                || !collection.getTitle().equals(request.getTitle()))
+        if (!Objects.equals(previousDescription, updatedCollection.getDescription())
+                || !Objects.equals(previousTitle, updatedCollection.getTitle())
+                || !Objects.equals(previousVisibility, updatedCollection.getVisibility()))
         {
             try {
                 float[] vector = embeddingService.embedCollection(updatedCollection);

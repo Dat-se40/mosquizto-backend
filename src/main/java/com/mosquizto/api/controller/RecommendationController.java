@@ -4,6 +4,12 @@ import com.mosquizto.api.dto.response.CollectionResponse;
 import com.mosquizto.api.dto.response.PageResponse;
 import com.mosquizto.api.dto.response.ResponseData;
 import com.mosquizto.api.service.RecommendationService;
+import com.mosquizto.api.sync.CollectionSyncService;
+import com.mosquizto.api.sync.SyncOptions;
+import com.mosquizto.api.sync.SyncReport;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.http.ResponseEntity;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -24,6 +30,9 @@ import java.util.concurrent.ExecutionException;
 @Tag(name = "Recommendation system", description = "recommendation base on user need")
 public class RecommendationController {
     private final RecommendationService recommendationService ;
+    private final CollectionSyncService syncService;
+    @Value("${sync.http-enabled:false}")
+    private boolean syncHttpEnabled;
 
     @Operation(summary = "Recommend collection", security = @SecurityRequirement(name = "bearerAuth"))
     @GetMapping("collections")
@@ -36,12 +45,14 @@ public class RecommendationController {
 
     @Operation(summary = "Sync all existing collections to Qdrant DB", security = @SecurityRequirement(name = "bearerAuth"))
     @PostMapping("/sync/collections")
-    public ResponseData<String> syncAllToQdrant() throws ExecutionException, InterruptedException {
-        recommendationService.syncAllCollectionsToQdrant();
-        return new ResponseData<>(
-                HttpStatus.OK.value(),
-                "Successfully synchronized collections to Qdrant. Check server logs for details.",
-                null
-        );
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ResponseData<SyncReport>> syncAllToQdrant() {
+        if (!syncHttpEnabled) return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(new ResponseData<>(403, "Use the sync CLI", null));
+        var report = syncService.run(new SyncOptions(SyncOptions.Target.QDRANT,
+                false, 100, SyncOptions.Cleanup.NONE, false, 1, 100));
+        int status = report.isSuccessful() ? 200 : 502;
+        return ResponseEntity.status(status).body(new ResponseData<>(status,
+                report.isSuccessful() ? "Sync completed" : "Sync failed", report));
     }
 }

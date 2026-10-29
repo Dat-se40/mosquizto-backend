@@ -159,6 +159,12 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.NOT_FOUND, ErrorCode.RESOURCE_NOT_FOUND, e.getMessage(), request);
     }
 
+    @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
+    public ResponseEntity<ErrorResponseException> handleSecurityAccessDenied(
+            org.springframework.security.access.AccessDeniedException e, WebRequest request) {
+        return build(HttpStatus.FORBIDDEN, ErrorCode.ACCESS_DENIED, "Access denied", request);
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponseException> handleUnexpectedException(Exception e, WebRequest request) {
         log.error("Unexpected error occurred", e);

@@ -2,122 +2,129 @@ package com.mosquizto.api.service.impl;
 
 import com.mosquizto.api.model.Collection;
 import com.mosquizto.api.service.VectorStoreService;
+import com.mosquizto.api.util.EmbeddingVectors;
+import io.grpc.Status;
 import io.qdrant.client.QdrantClient;
 import io.qdrant.client.grpc.Collections;
 import io.qdrant.client.grpc.Points;
-import io.qdrant.client.grpc.JsonWithInt.Value; // Corrected Import
-import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import static io.qdrant.client.ValueFactory.value; // Recommended for clean payloads
-
-import java.util.ArrayList;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import static io.qdrant.client.ValueFactory.value;
 
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class VectorStoreServiceImpl implements VectorStoreService {
+    public static final String COLLECTION_NAME = "mosquizto_collections";
     private final QdrantClient qdrantClient;
-    private static final String COLLECTION_NAME = "mosquizto_collections";
-    private static final int VECTOR_SIZE = 384;
+    @Value("${sync.store-timeout-seconds:60}")
+    private int timeoutSeconds = 60;
+    private volatile boolean configured;
+
+    private <T> T await(Future<T> future) {
+        try {
+            return future.get(timeoutSeconds, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Qdrant operation interrupted", e);
+        } catch (Exception e) {
+            future.cancel(true);
+            throw new IllegalStateException("Qdrant operation failed", e);
+        }
+    }
 
     @Override
-    @PostConstruct
-    public void ensureCollection() {
-        try {
-            qdrantClient.getCollectionInfoAsync(COLLECTION_NAME).get();
-        } catch (Exception e) {
-            try {
-                qdrantClient.createCollectionAsync(
-                        COLLECTION_NAME,
-                        Collections.VectorParams.newBuilder()  // ← sai overload!
-                                .setSize(VECTOR_SIZE)
-                                .setDistance(Collections.Distance.Cosine)
-                                .build()
-                ).get();
-            } catch (InterruptedException | ExecutionException ex) {
-                // Best practice: Restore the interrupted status
-                if (ex instanceof InterruptedException) {
-                    Thread.currentThread().interrupt();
-                }
-                // Throw as a runtime exception so Spring knows initialization failed
-                throw new RuntimeException("Failed to create Qdrant collection", ex);
-            }
+    public synchronized void ensureCollection() {
+        if (configured) {
+            return;
         }
-
+        try {
+            var info = await(qdrantClient.getCollectionInfoAsync(COLLECTION_NAME, Duration.ofSeconds(timeoutSeconds)));
+            var params = info.getConfig().getParams().getVectorsConfig().getParams();
+            if (params.getSize() != EmbeddingVectors.DIMENSIONS
+                    || params.getDistance() != Collections.Distance.Cosine) {
+                throw new IllegalStateException("Qdrant collection vector schema is incompatible");
+            }
+        } catch (RuntimeException e) {
+            if (Status.fromThrowable(e).getCode() != Status.Code.NOT_FOUND) {
+                throw e;
+            }
+            await(qdrantClient.createCollectionAsync(COLLECTION_NAME,
+                    Collections.VectorParams.newBuilder().setSize(EmbeddingVectors.DIMENSIONS)
+                            .setDistance(Collections.Distance.Cosine).build()));
+        }
+        configured = true;
     }
 
     @Override
     public void upsertCollection(Collection col, float[] vector) {
-        if (vector == null || vector.length == 0) {
-            throw new IllegalArgumentException("BÁO ĐỘNG: Vector của Collection ID " + col.getId() + " bị rỗng! Dừng lưu Qdrant.");
-        }
-        // Drastically simplified using ValueFactory.value()
-        Map<String, Value> payload = Map.of(
+        EmbeddingVectors.requireValid(vector);
+        ensureCollection();
+        var payload = Map.of(
                 "collectionId", value(col.getId()),
-                "description", value(col.getDescription()),
-                "title", value(col.getTitle()),
+                "description", value(col.getDescription() == null ? "" : col.getDescription()),
+                "title", value(col.getTitle() == null ? "" : col.getTitle()),
                 "owner", value(col.getCreatedBy().getUsername()),
-                "isPublic", value(col.getVisibility())
-        );
-
-        Points.PointStruct point = Points.PointStruct.newBuilder()
-                .setId(Points.PointId.newBuilder().setNum(col.getId()).build())
-                .setVectors(Points.Vectors.newBuilder()
-                        .setVector(Points.Vector.newBuilder()
-                                .addAllData(toFloatList(vector)).build())
-                        .build())
-                .putAllPayload(payload)
-                .build();
-
-        try {
-            // THÊM .get() Ở ĐÂY ĐỂ CHỜ KẾT QUẢ VÀ BẮT LỖI
-            qdrantClient.upsertAsync(COLLECTION_NAME, List.of(point)).get();
-        } catch (Exception e) {
-            log.error("Failed to upsert vector for collection ID: {}", col.getId(), e);
+                "isPublic", value(Boolean.TRUE.equals(col.getVisibility())));
+        List<Float> data = new java.util.ArrayList<>(vector.length);
+        for (float component : vector) {
+            data.add(component);
         }
+        var point = Points.PointStruct.newBuilder()
+                .setId(Points.PointId.newBuilder().setNum(col.getId()))
+                .setVectors(Points.Vectors.newBuilder().setVector(Points.Vector.newBuilder().addAllData(data)))
+                .putAllPayload(payload).build();
+        var result = await(qdrantClient.upsertAsync(Points.UpsertPoints.newBuilder()
+                .setCollectionName(COLLECTION_NAME).setWait(true).addPoints(point).build(),
+                Duration.ofSeconds(timeoutSeconds)));
+        requireCompleted(result);
     }
 
     @Override
     public List<Collection> getEmbeddedCollections() {
-        //qdrantClient.getCollectionInfoAsync(COLLECTION_NAME).get().
-        return null ;
+        throw new UnsupportedOperationException("Use paginated point IDs for reconciliation");
     }
 
     @Override
-    public void deleteCollection(Integer collectionId) {
-        if (collectionId == null) {
-            log.warn("Collection ID rỗng, bỏ qua thao tác xóa trên Qdrant.");
-            return;
+    public void deleteCollection(Integer id) {
+        if (id == null || id <= 0) {
+            throw new IllegalArgumentException("Collection ID must be positive");
         }
+        var result = await(qdrantClient.deleteAsync(Points.DeletePoints.newBuilder()
+                .setCollectionName(COLLECTION_NAME).setWait(true)
+                .setPoints(Points.PointsSelector.newBuilder()
+                        .setPoints(Points.PointsIdsList.newBuilder()
+                                .addIds(Points.PointId.newBuilder().setNum(id)))).build(),
+                Duration.ofSeconds(timeoutSeconds)));
+        requireCompleted(result);
+    }
 
+    public Points.ScrollResponse scroll(Points.PointId offset, int limit) {
+        var request = Points.ScrollPoints.newBuilder().setCollectionName(COLLECTION_NAME)
+                .setLimit(limit).setWithPayload(Points.WithPayloadSelector.newBuilder().setEnable(false))
+                .setWithVectors(Points.WithVectorsSelector.newBuilder().setEnable(false));
+        if (offset != null) {
+            request.setOffset(offset);
+        }
         try {
-            // Tạo Point ID từ collectionId (vì lúc upsert bạn dùng .setNum(col.getId()))
-            Points.PointId pointId = Points.PointId.newBuilder()
-                    .setNum(collectionId)
-                    .build();
-
-            // Gọi lệnh xóa
-            qdrantClient.deleteAsync(
-                    COLLECTION_NAME,
-                    List.of(pointId)
-            ).get(); // Dùng .get() để chờ kết quả
-
-            log.info("🗑️ Đã xóa thành công collection ID {} khỏi Qdrant", collectionId);
-        } catch (Exception e) {
-            log.error("❌ Lỗi khi xóa collection ID {} khỏi Qdrant: {}", collectionId, e.getMessage(), e);
+            return await(qdrantClient.scrollAsync(request.build(), Duration.ofSeconds(timeoutSeconds)));
+        } catch (RuntimeException e) {
+            if (Status.fromThrowable(e).getCode() == Status.Code.NOT_FOUND) {
+                return Points.ScrollResponse.getDefaultInstance();
+            }
+            throw e;
         }
-    }   
+    }
 
-
-    private List<Float> toFloatList(float[] arr) {
-        List<Float> list = new ArrayList<>(arr.length);
-        for (float f : arr) list.add(f);
-        return list;
+    private static void requireCompleted(Points.UpdateResult result) {
+        if (result.getStatus() != Points.UpdateStatus.Completed) {
+            throw new IllegalStateException("Qdrant update did not complete");
+        }
     }
 }

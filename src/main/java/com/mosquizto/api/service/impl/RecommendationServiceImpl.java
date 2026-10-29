@@ -80,44 +80,6 @@ public class RecommendationServiceImpl implements RecommendationService {
                 .build();
     }
 
-    @Override
-    public void syncAllCollectionsToQdrant() throws ExecutionException, InterruptedException {
-        log.info("{} 🔄 [SYNC] Bắt đầu đồng bộ toàn bộ Collection sang Qdrant...", TAG);
-        List<Collection> allCollections = collectionRepository.findAll();
-        log.info("{} 🔄 [SYNC] Tìm thấy {} collections trong PostgreSQL.", TAG, allCollections.size());
-
-        int successCount = 0;
-        for (Collection col : allCollections) {
-            try {
-                float[] vector = embeddingService.embedCollection(col);
-                vectorStoreService.upsertCollection(col, vector);
-                successCount++;
-            } catch (Exception e) {
-                log.error("{} ❌ [SYNC] Lỗi tại ID {}: {}", TAG, col.getId(), e.getMessage());
-            }
-        }
-        log.info("{} ✅ [SYNC] Hoàn tất! Đã đồng bộ thành công {}/{} collections.", TAG, successCount, allCollections.size());
-        try
-        {
-            var points = qdrantClient.retrieveAsync(
-                    COLLECTION_NAME,
-                    List.of(
-                            Points.PointId.newBuilder().setNum(1).build()
-                    ),
-                    null,
-                    Points.WithVectorsSelector.newBuilder()
-                            .setEnable(true)
-                            .build(),
-                    null
-            ).get();
-
-            System.out.println(points);
-        } catch (Exception e) {
-            log.info(e.getMessage());
-        }
-
-    }
-
     public List<String> getRecommendedCollectionId(int page, int size) throws ExecutionException, InterruptedException {
         // 1. Lấy danh sách ID đã xem từ DB
         var recentOpened = collectionService.getRecentOpenedCollection();

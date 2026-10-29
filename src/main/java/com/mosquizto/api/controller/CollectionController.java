@@ -7,6 +7,12 @@ import com.mosquizto.api.dto.response.PageResponse;
 import com.mosquizto.api.dto.response.ResponseData;
 import com.mosquizto.api.service.CollectionSearchService;
 import com.mosquizto.api.service.CollectionService;
+import com.mosquizto.api.sync.CollectionSyncService;
+import com.mosquizto.api.sync.SyncOptions;
+import com.mosquizto.api.sync.SyncReport;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.http.ResponseEntity;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -25,6 +31,9 @@ public class CollectionController {
 
     private final CollectionService collectionService;
     private final CollectionSearchService collectionSearchService ;
+    private final CollectionSyncService syncService;
+    @Value("${sync.http-enabled:false}")
+    private boolean syncHttpEnabled;
     @Operation(summary = "Create new collection", security = @SecurityRequirement(name = "bearerAuth"))
     @PostMapping
     public ResponseData<Integer> create(@Valid @RequestBody CollectionRequest request) {
@@ -81,11 +90,17 @@ public class CollectionController {
         return new ResponseData<>(HttpStatus.OK.value(), "Success", response);
     }
     @Operation(summary = "Reindex collections", security = @SecurityRequirement(name = "bearerAuth"))
-    @GetMapping("/create_index")
-    public ResponseData<Void> createIndex()
+    @PostMapping("/create_index")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ResponseData<SyncReport>> createIndex()
     {
-        collectionSearchService.reindexAll();
-        return new ResponseData<>(HttpStatus.OK.value(),"success");
+        if (!syncHttpEnabled) return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(new ResponseData<>(403, "Use the sync CLI", null));
+        var report = syncService.run(new SyncOptions(SyncOptions.Target.MEILISEARCH,
+                false, 100, SyncOptions.Cleanup.NONE, false, 1, 100));
+        int status = report.isSuccessful() ? 200 : 502;
+        return ResponseEntity.status(status).body(new ResponseData<>(status,
+                report.isSuccessful() ? "Sync completed" : "Sync failed", report));
     }
     @GetMapping("/recent-opened")
     @Operation(summary = "Get recent collections", security = @SecurityRequirement(name = "bearerAuth"))

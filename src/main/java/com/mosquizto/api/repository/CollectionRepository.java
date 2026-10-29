@@ -17,6 +17,22 @@ import java.util.Optional;
 @Repository
 public interface CollectionRepository extends JpaRepository<Collection, Integer> {
 
+    // Keyset pagination keeps memory bounded and avoids shifting offset pages.
+    @Query("SELECT c FROM Collection c JOIN FETCH c.createdBy u " +
+            "WHERE c.id > :afterId AND c.id <= :throughId " +
+            "AND c.deletedAt IS NULL AND u.deletedAt IS NULL ORDER BY c.id")
+    List<Collection> findSyncBatch(@Param("afterId") int afterId,
+                                   @Param("throughId") int throughId, Pageable pageable);
+
+    // Hibernate 6 infers Serializable for MAX over the generic mapped-superclass ID.
+    // Native scalar SQL preserves the numeric JDBC type instead of deserializing it.
+    @Query(value = "SELECT COALESCE(MAX(id), 0) FROM tbl_collection", nativeQuery = true)
+    int maxCollectionId();
+
+    @Query("SELECT COUNT(c) > 0 FROM Collection c WHERE c.id = :id " +
+            "AND c.deletedAt IS NULL AND c.createdBy.deletedAt IS NULL")
+    boolean isSyncEligible(@Param("id") Integer id);
+
     @Query("SELECT c FROM Collection c " +
             "WHERE c.id = :id " +
             "AND c.deletedAt IS NULL")

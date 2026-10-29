@@ -2,12 +2,14 @@
 
 Hướng dẫn build, chạy và deploy. Giới thiệu tính năng, API và cấu trúc code: [OVERVIEW.md](OVERVIEW.md).
 
+ONNX trên filesystem/PVC, CLI sync và biến môi trường: [ONNX_SYNC.md](ONNX_SYNC.md).
+
 ## 1. Cần có gì
 
 - **JDK 17**. JDK 21 hoặc 25 build fail vì Lombok của Spring Boot 3.2.4 không sinh getter/`builder()`.
 - Không cần cài Maven riêng. Project có `mvnw` và `mvnw.cmd`. Lần chạy đầu wrapper tự tải Maven.
 - Docker Desktop nếu chạy service hoặc cả app bằng container.
-- Internet lần đầu để Maven tải dependency. Model ONNX chỉ tải khi build image với `INCLUDE_EMBEDDING_MODEL=true`.
+- Internet lần đầu để Maven tải dependency. Model ONNX tải qua `--prepare-model` hoặc khi build image với `INCLUDE_EMBEDDING_MODEL=true`.
 
 ## 2. Cài JDK 17
 
@@ -179,7 +181,7 @@ $env:INCLUDE_EMBEDDING_MODEL = "true"
 docker compose up -d --build
 ```
 
-Thiếu model thì server vẫn lên. Recommendation không tạo vector.
+Thiếu model thì server vẫn lên ở chế độ degraded. Thao tác embedding báo lỗi và không ghi vector giả; xem ONNX_SYNC.md.
 
 Dừng:
 
@@ -205,14 +207,7 @@ Các service (`postgres`, `redis`, `meilisearch`, `qdrant`) có thể để tron
 
 Trước tiên `java -version` phải ra 17 (mục 2.3).
 
-Tải model chỉ khi cần recommendation. Bỏ qua thì server vẫn chạy:
-
-```powershell
-New-Item -ItemType Directory -Force src\main\resources\models | Out-Null
-Invoke-WebRequest "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx" -OutFile "src\main\resources\models\model.onnx"
-Invoke-WebRequest "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json" -OutFile "src\main\resources\models\tokenizer.json"
-Invoke-WebRequest "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer_config.json" -OutFile "src\main\resources\models\tokenizer_config.json"
-```
+Model hiện được đọc từ filesystem theo revision/checksum, không còn từ src/main/resources/models. Sau khi build JAR, đặt EMBEDDING_MODEL_DIR rồi chạy java -jar target/mosquizto-api-0.0.1-SNAPSHOT.jar --prepare-model. Xem [ONNX_SYNC.md](ONNX_SYNC.md) để dùng PVC, cấu hình CLI và kiểm thử inference.
 
 Build:
 
@@ -270,7 +265,7 @@ Terminal đang dùng JDK khác 17. `java -version` và `.\mvnw.cmd -version` ph�
 
 **Recommendation không tạo vector**
 
-Image hoặc classpath không có `model.onnx`. Đây là mặc định. Bật bằng `INCLUDE_EMBEDDING_MODEL=true` khi build Docker, hoặc tải model ở mục 5 rồi build lại.
+Kiểm tra EMBEDDING_MODEL_DIR, revision/checksum và log khởi tạo. Với PVC, chạy bước prepare-model trước, sau đó restart backend. Thiếu model hoặc model lỗi sẽ chặn vector writes; xem ONNX_SYNC.md.
 
 **Không gửi được email Gmail**
 

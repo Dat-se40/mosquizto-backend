@@ -1,0 +1,23 @@
+# CLI imports only sync dependencies; never migrate/seed a database as a side effect.
+spring:
+  main:
+    web-application-type: none
+    banner-mode: "off"
+  flyway:
+    enabled: false
+  jpa:
+    open-in-view: false
+    show-sql: false
+    hibernate:
+      ddl-auto: validate
+  datasource:
+    hikari:
+      maximum-pool-size: 4
+      connection-timeout: 10000
+      # Disable leak warnings for the dedicated long-lived advisory-lock connection.
+      leak-detection-threshold: 0
+logging:
+  level:
+    root: WARN
+    com.mosquizto.api.sync: INFO
+    com.mosquizto.api.service.impl.EmbeddingServiceImpl: INFO

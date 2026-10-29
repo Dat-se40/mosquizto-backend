@@ -147,6 +147,12 @@
 
 
 		<!-- AI-->
+		<!-- Qdrant publishes gRPC dependencies as runtime-only; sync handles status codes. -->
+		<dependency>
+			<groupId>io.grpc</groupId>
+			<artifactId>grpc-api</artifactId>
+			<version>1.65.1</version>
+		</dependency>
 		<dependency>
 			<groupId>io.qdrant</groupId>
 			<artifactId>client</artifactId>

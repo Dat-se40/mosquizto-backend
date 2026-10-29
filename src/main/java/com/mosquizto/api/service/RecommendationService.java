@@ -8,5 +8,4 @@ import java.util.concurrent.ExecutionException;
 
 public interface RecommendationService {
     public PageResponse<CollectionResponse> recommendBaseOnRecent(int page, int size)  throws ExecutionException, InterruptedException  ;
-    void syncAllCollectionsToQdrant() throws ExecutionException, InterruptedException;
 }

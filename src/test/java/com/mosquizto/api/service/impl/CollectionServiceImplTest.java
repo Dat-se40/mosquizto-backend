@@ -1,6 +1,7 @@
 package com.mosquizto.api.service.impl;
 
 import com.mosquizto.api.mapper.CollectionMapper;
+import com.mosquizto.api.dto.request.CollectionRequest;
 import com.mosquizto.api.model.Collection;
 import com.mosquizto.api.model.User;
 import com.mosquizto.api.model.UserCollection;
@@ -77,6 +78,57 @@ class CollectionServiceImplTest {
             TransactionSynchronizationManager.clearSynchronization();
         }
         TransactionSynchronizationManager.setActualTransactionActive(false);
+    }
+
+    @Test
+    void shouldReembedChangedTextAndRefreshVisibilityAfterMapping() {
+        User user = new User();
+        user.setId(1L);
+        Collection collection = Collection.initialize(user, "Before", null, true);
+        collection.setId(7);
+        CollectionRequest request = new CollectionRequest();
+        request.setTitle("After");
+        request.setDescription("Updated");
+        request.setVisibility(false);
+        when(currentUserProvider.getCurrentUser()).thenReturn(user);
+        when(collectionRepository.findActiveById(7)).thenReturn(Optional.of(collection));
+        org.mockito.Mockito.doAnswer(invocation -> {
+            collection.updateInfo(request.getTitle(), request.getDescription(), request.getVisibility());
+            return null;
+        }).when(collectionMapper).updateEntity(collection, request);
+        when(collectionRepository.save(collection)).thenReturn(collection);
+        float[] vector = new float[384];
+        vector[0] = 1;
+        when(embeddingService.embedCollection(collection)).thenReturn(vector);
+
+        collectionService.updateCollection(7, request);
+
+        verify(vectorStoreService).upsertCollection(collection, vector);
+        verify(collectionSearchService).upsert(collection);
+    }
+
+    @Test
+    void shouldRefreshQdrantWhenOnlyVisibilityChanges() {
+        User user = new User();
+        user.setId(1L);
+        Collection collection = Collection.initialize(user, "Java", null, true);
+        collection.setId(7);
+        CollectionRequest request = new CollectionRequest();
+        request.setTitle("Java");
+        request.setVisibility(false);
+        when(currentUserProvider.getCurrentUser()).thenReturn(user);
+        when(collectionRepository.findActiveById(7)).thenReturn(Optional.of(collection));
+        org.mockito.Mockito.doAnswer(invocation -> {
+            collection.updateInfo(request.getTitle(), request.getDescription(), request.getVisibility());
+            return null;
+        }).when(collectionMapper).updateEntity(collection, request);
+        when(collectionRepository.save(collection)).thenReturn(collection);
+        float[] vector = new float[384]; vector[0] = 1;
+        when(embeddingService.embedCollection(collection)).thenReturn(vector);
+
+        collectionService.updateCollection(7, request);
+
+        verify(vectorStoreService).upsertCollection(collection, vector);
     }
 
     @Test

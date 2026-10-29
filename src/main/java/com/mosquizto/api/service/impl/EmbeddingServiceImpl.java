@@ -1,6 +1,5 @@
 package com.mosquizto.api.service.impl;
 
-import ai.djl.Application;
 import ai.djl.huggingface.tokenizers.Encoding;
 import ai.djl.huggingface.tokenizers.HuggingFaceTokenizer;
 import ai.onnxruntime.OnnxTensor;
@@ -8,154 +7,155 @@ import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtSession;
 import com.mosquizto.api.model.Collection;
 import com.mosquizto.api.service.EmbeddingService;
+import com.mosquizto.api.util.EmbeddingVectors;
+import com.mosquizto.api.util.ModelArtifacts;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
-import java.io.InputStream;
 import java.nio.LongBuffer;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.Map;
 
 @Service
 @Slf4j
 public class EmbeddingServiceImpl implements EmbeddingService {
+    @Value("${embedding.model-dir:/models}")
+    private String modelDir = "/models";
+    @Value("${embedding.model-revision:" + ModelArtifacts.REVISION + "}")
+    private String revision = ModelArtifacts.REVISION;
+    @Value("${embedding.model-sha256:" + ModelArtifacts.MODEL_SHA256 + "}")
+    private String modelHash = ModelArtifacts.MODEL_SHA256;
+    @Value("${embedding.tokenizer-sha256:" + ModelArtifacts.TOKENIZER_SHA256 + "}")
+    private String tokenizerHash = ModelArtifacts.TOKENIZER_SHA256;
+
     private OrtEnvironment env;
     private OrtSession session;
     private HuggingFaceTokenizer tokenizer;
-    private boolean isInitialized = false ;
+    private volatile boolean initialized;
 
-    @Override
+    /** API can run degraded. CLI calls init() directly and propagates failure. */
     @EventListener(ApplicationReadyEvent.class)
-    public void init() {
-        if (getClass().getResource("/models/model.onnx") == null
-                || getClass().getResource("/models/tokenizer.json") == null) {
-            log.warn("[EmbeddingService] ONNX model is not on the classpath. Recommendation embedding stays off and the server keeps running.");
-            return;
-        }
-
+    public void initializeForApi() {
         try {
-            log.info("[EmbeddingService] Loading ONNX model...");
-            long startTime = System.currentTimeMillis();
-
-            env = OrtEnvironment.getEnvironment();
-
-            log.info("[EmbeddingService] Reading model.onnx from classpath...");
-            try (InputStream is = getClass().getResourceAsStream("/models/model.onnx")) {
-                byte[] modelBytes = is.readAllBytes();
-                log.info("[EmbeddingService] model.onnx size: {} bytes", modelBytes.length);
-                session = env.createSession(modelBytes, new OrtSession.SessionOptions());
-            }
-
-            log.info("[EmbeddingService] Loading tokenizer.json...");
-            Path tokenizerPath = Paths.get(
-                    getClass().getResource("/models/tokenizer.json").toURI()
-            );
-            tokenizer = HuggingFaceTokenizer.newInstance(tokenizerPath);
-
-            isInitialized = true;
-            long elapsed = System.currentTimeMillis() - startTime;
-            log.info("[EmbeddingService] ONNX model loaded in {}ms", elapsed);
-        } catch (Exception e) {
-            log.error("[EmbeddingService] Failed to initialize ONNX model. Recommendation embedding stays off.", e);
+            init();
+        } catch (RuntimeException e) {
+            log.warn("Embedding unavailable; vector writes will fail: {}", e.getMessage());
         }
     }
 
     @Override
-    public float[] embed(String text) {
-        if (!isInitialized) {
-            log.warn("[EmbeddingService] Not initialized, returning zero vector");
-            return new float[384];
+    public synchronized void init() {
+        if (initialized) {
+            return;
         }
+        try {
+            Path directory = ModelArtifacts.verify(Path.of(modelDir), revision, modelHash, tokenizerHash);
+            env = OrtEnvironment.getEnvironment();
+            try (OrtSession.SessionOptions options = new OrtSession.SessionOptions()) {
+                options.setIntraOpNumThreads(1);
+                session = env.createSession(directory.resolve("model.onnx").toString(), options);
+            }
+            tokenizer = HuggingFaceTokenizer.builder().optTokenizerPath(directory.resolve("tokenizer.json"))
+                    .optTruncation(true).optMaxLength(256).build();
+            initialized = true;
+            embed("Model initialization validation");
+            log.info("Embedding ready: revision={}, dimensions={}", revision, EmbeddingVectors.DIMENSIONS);
+        } catch (Exception | LinkageError e) {
+            close();
+            throw new IllegalStateException("Cannot initialize verified embedding model", e);
+        }
+    }
 
+    @Override
+    public synchronized float[] embed(String text) {
+        if (!initialized) {
+            throw new IllegalStateException("Embedding model is not initialized");
+        }
+        if (text == null || text.isBlank()) {
+            throw new IllegalArgumentException("Embedding text must not be empty");
+        }
         try {
             Encoding encoding = tokenizer.encode(text);
-
-            long[] inputIds      = encoding.getIds();
-            long[] attentionMask = encoding.getAttentionMask();
-            long[] tokenTypeIds  = encoding.getTypeIds();
-
-            // Shape: [1, seq_len]
-            long[] shape = {1, inputIds.length};
-
-            Map<String, OnnxTensor> inputs = Map.of(
-                    "input_ids",      OnnxTensor.createTensor(env, LongBuffer.wrap(inputIds), shape),
-                    "attention_mask", OnnxTensor.createTensor(env, LongBuffer.wrap(attentionMask), shape),
-                    "token_type_ids", OnnxTensor.createTensor(env, LongBuffer.wrap(tokenTypeIds), shape)
-            );
-
-            try (OrtSession.Result result = session.run(inputs)) {
-                // Output shape: [1, seq_len, 384]
-                float[][][] tokenEmbeddings = (float[][][]) result.get(0).getValue();
-                return meanPooling(tokenEmbeddings[0], attentionMask);
+            // The sentence-transformers model uses a 256-token maximum.
+            long[] ids = encoding.getIds();
+            long[] mask = encoding.getAttentionMask();
+            long[] types = encoding.getTypeIds();
+            long[] shape = {1, ids.length};
+            try (OnnxTensor input = OnnxTensor.createTensor(env, LongBuffer.wrap(ids), shape);
+                 OnnxTensor attention = OnnxTensor.createTensor(env, LongBuffer.wrap(mask), shape);
+                 OnnxTensor tokenTypes = OnnxTensor.createTensor(env, LongBuffer.wrap(types), shape);
+                 OrtSession.Result result = session.run(Map.of(
+                         "input_ids", input, "attention_mask", attention, "token_type_ids", tokenTypes))) {
+                float[][][] embeddings = (float[][][]) result.get(0).getValue();
+                return meanPooling(embeddings[0], mask);
             }
-
         } catch (Exception e) {
-            log.error("[EmbeddingService] Embed error: {}", e.getMessage(), e);
-            return new float[384];
+            throw new IllegalStateException("Embedding inference failed", e);
         }
     }
 
     @Override
     public float[] embedCollection(Collection collection) {
-        // 1. Kiểm tra an toàn
         if (collection == null) {
-            log.warn("[Embedding] Collection is null, returning empty vector");
-            return new float[384];
+            throw new IllegalArgumentException("Collection must not be null");
         }
-
-        // 2. Ghép Title và Description
-        StringBuilder textToEmbed = new StringBuilder();
-
-        if (collection.getTitle() != null && !collection.getTitle().isBlank()) {
-            textToEmbed.append(collection.getTitle().trim());
-        }
-
-        if (collection.getDescription() != null && !collection.getDescription().isBlank()) {
-            textToEmbed.append(". ").append(collection.getDescription().trim());
-        }
-
-        String finalText = textToEmbed.toString();
-
-        // Tránh trường hợp cả title và description đều trống
-        if (finalText.isBlank()) {
-            log.warn("[Embedding] Collection ID {} has empty text, returning zero vector", collection.getId());
-            return new float[384];
-        }
-
-        // 3. Gọi model ONNX để tạo mảng 384 chiều thực sự
-        return embed(finalText);
+        String title = collection.getTitle() == null ? "" : collection.getTitle().trim();
+        String description = collection.getDescription() == null ? "" : collection.getDescription().trim();
+        return embed((title + (title.isEmpty() || description.isEmpty() ? "" : ". ") + description).trim());
     }
 
-    // Mean pooling — lấy trung bình có trọng số theo attention mask
-    // Vector/chiều dài vector
-    private float[] meanPooling(float[][] tokenEmbeddings, long[] attentionMask) {
-        int seqLen = tokenEmbeddings.length;
-        int dims   = tokenEmbeddings[0].length;  // 384
-        float[] result = new float[dims];
-        float maskSum  = 0;
-
-        for (int i = 0; i < seqLen; i++) {
-            float m = attentionMask[i];
-            maskSum += m;
-            for (int j = 0; j < dims; j++) {
-                result[j] += tokenEmbeddings[i][j] * m;
+    static float[] meanPooling(float[][] embeddings, long[] mask) {
+        if (embeddings.length == 0 || embeddings.length != mask.length) {
+            throw new IllegalArgumentException("Invalid token embedding shape");
+        }
+        float[] result = new float[EmbeddingVectors.DIMENSIONS];
+        long maskSum = 0;
+        for (int i = 0; i < embeddings.length; i++) {
+            if (embeddings[i].length != result.length) {
+                throw new IllegalArgumentException("Invalid embedding dimensions");
+            }
+            maskSum += mask[i];
+            for (int j = 0; j < result.length; j++) {
+                result[j] += embeddings[i][j] * mask[i];
             }
         }
-
-        // Normalize
-        float norm = 0;
-        for (int j = 0; j < dims; j++) {
-            result[j] /= Math.max(maskSum, 1e-9f);
-            norm += result[j] * result[j];
+        if (maskSum <= 0) {
+            throw new IllegalArgumentException("Empty attention mask");
         }
-        norm = (float) Math.sqrt(norm);
-        for (int j = 0; j < dims; j++) {
+        for (int j = 0; j < result.length; j++) {
+            result[j] /= maskSum;
+        }
+        EmbeddingVectors.requireValid(result);
+        double norm = 0;
+        for (float value : result) {
+            norm += (double) value * value;
+        }
+        norm = Math.sqrt(norm);
+        for (int j = 0; j < result.length; j++) {
             result[j] /= norm;
         }
-
         return result;
+    }
+
+    @PreDestroy
+    public synchronized void close() {
+        initialized = false;
+        if (tokenizer != null) {
+            tokenizer.close();
+            tokenizer = null;
+        }
+        if (session != null) {
+            try {
+                session.close();
+            } catch (Exception e) {
+                log.warn("Could not close ONNX session");
+            }
+            session = null;
+        }
+        // OrtEnvironment is shared by this JVM.
     }
 }

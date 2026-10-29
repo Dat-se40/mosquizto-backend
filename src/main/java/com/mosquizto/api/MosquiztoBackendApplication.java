@@ -11,6 +11,14 @@ import org.springframework.scheduling.annotation.EnableAsync;
 public class MosquiztoBackendApplication {
 
 	public static void main(String[] args) {
+		if (java.util.Arrays.asList(args).contains("--prepare-model")) {
+			System.exit(com.mosquizto.sync.PrepareModel.run(System.getenv()));
+			return;
+		}
+		if (java.util.Arrays.asList(args).contains("--sync")) {
+			System.exit(com.mosquizto.sync.SyncApplication.run(System.getenv()));
+			return;
+		}
 		SpringApplication.run(MosquiztoBackendApplication.class, args);
 	}
 
