@@ -1,10 +1,12 @@
 # Mosquizto Backend
 
-Hướng dẫn build, chạy và deploy. Giới thiệu tính năng, API và cấu trúc code: [OVERVIEW.md](OVERVIEW.md).
+Backend Java/Spring Boot của Mosquizto. Các bước bên dưới dành cho việc build và chạy ứng dụng trên máy hoặc bằng Docker Compose.
 
-ONNX trên filesystem/PVC, CLI sync và biến môi trường: [ONNX_SYNC.md](ONNX_SYNC.md).
+Nếu đang làm phần CI/DevSecOps, bắt đầu từ [hướng dẫn chạy scan và đọc report](security/README.md). [Policy security gate](security/POLICY.md) giải thích vì sao pipeline cho đi tiếp hoặc dừng; [luồng Jenkins và GitOps](docs/pipeline-flow.md) mô tả cách ghép các bước đó vào CI/CD.
 
-## 1. Cần có gì
+Giới thiệu tính năng, API và cấu trúc code: [OVERVIEW.md](OVERVIEW.md).
+
+## 1. Công cụ cần chuẩn bị
 
 - **JDK 17**. JDK 21 hoặc 25 build fail vì Lombok của Spring Boot 3.2.4 không sinh getter/`builder()`.
 - Không cần cài Maven riêng. Project có `mvnw` và `mvnw.cmd`. Lần chạy đầu wrapper tự tải Maven.
@@ -150,7 +152,7 @@ Gmail cần App Password, không dùng mật khẩu đăng nhập thường: [ht
 
 Compose dựng `postgres`, `redis`, `meilisearch`, `qdrant` và `app`. App đọc biến từ `.env`. Flyway migrate PostgreSQL lúc app start.
 
-Build mặc định không tải model ONNX, để CI không kéo khoảng 90 MB từ Hugging Face mỗi lần runner mới.
+Build Compose mặc định không tải model ONNX. Khi cần thử recommendation, bật model theo hướng dẫn bên dưới. Jenkins build image cho EKS có bật model này.
 
 ```bash
 docker compose up -d --build
@@ -181,7 +183,7 @@ $env:INCLUDE_EMBEDDING_MODEL = "true"
 docker compose up -d --build
 ```
 
-Thiếu model thì server vẫn lên ở chế độ degraded. Thao tác embedding báo lỗi và không ghi vector giả; xem ONNX_SYNC.md.
+Thiếu model thì server vẫn lên ở chế độ degraded. Thao tác embedding báo lỗi và không ghi vector giả.
 
 Dừng:
 
@@ -207,7 +209,7 @@ Các service (`postgres`, `redis`, `meilisearch`, `qdrant`) có thể để tron
 
 Trước tiên `java -version` phải ra 17 (mục 2.3).
 
-Model hiện được đọc từ filesystem theo revision/checksum, không còn từ src/main/resources/models. Sau khi build JAR, đặt EMBEDDING_MODEL_DIR rồi chạy java -jar target/mosquizto-api-0.0.1-SNAPSHOT.jar --prepare-model. Xem [ONNX_SYNC.md](ONNX_SYNC.md) để dùng PVC, cấu hình CLI và kiểm thử inference.
+Model hiện được đọc từ filesystem theo revision/checksum, không còn từ src/main/resources/models. Sau khi build JAR, đặt EMBEDDING_MODEL_DIR rồi chạy java -jar target/mosquizto-api-0.0.1-SNAPSHOT.jar --prepare-model.
 
 Build:
 
@@ -265,7 +267,7 @@ Terminal đang dùng JDK khác 17. `java -version` và `.\mvnw.cmd -version` ph�
 
 **Recommendation không tạo vector**
 
-Kiểm tra EMBEDDING_MODEL_DIR, revision/checksum và log khởi tạo. Với PVC, chạy bước prepare-model trước, sau đó restart backend. Thiếu model hoặc model lỗi sẽ chặn vector writes; xem ONNX_SYNC.md.
+Kiểm tra EMBEDDING_MODEL_DIR, revision/checksum và log khởi tạo. Với PVC, chạy bước prepare-model trước, sau đó restart backend. Thiếu model hoặc model lỗi sẽ chặn vector writes.
 
 **Không gửi được email Gmail**
 
@@ -278,3 +280,11 @@ Kiểm tra `VPS_IP`, `SERVER_URL`, `SERVER_NAME`.
 **Tìm kiếm hoặc recommendation không nối được service**
 
 Kiểm tra `MEILI_SEARCH_HOST`, `MEILI_MASTER_KEY`, `QDRANT_HOST`, `QDRANT_PORT`, và container `meilisearch` / `qdrant` đã chạy. App trên máy phải dùng `localhost`, không dùng tên service Docker.
+
+## 7. Kiểm tra bảo mật trước khi phát hành
+
+Backend dùng Dependency-Check để tìm lỗ hổng đã biết trong thư viện Maven và Trivy để kiểm tra image Docker. Sau khi scan, security gate đọc report và quyết định pipeline có được push image/cập nhật GitOps hay không.
+
+Lần đầu làm phần này, làm theo [security/README.md](security/README.md): chạy một scanner, mở report, rồi xem `gate-summary.json` để hiểu kết quả. Có thể đánh giá lại report đã có mà không cần scan từ đầu.
+
+Build bị gate chặn nghĩa là còn finding cần xử lý hoặc xem xét. Cách phân biệt với lỗi công cụ, ngưỡng đang dùng và bốn ngoại lệ hiện tại được giải thích trong [security/POLICY.md](security/POLICY.md).
