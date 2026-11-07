@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "policy": "mosquizto-security-v1",
+  "exceptions": [
+    {
+      "id": "DC-ONNX-001",
+      "cve": "CVE-2024-7776",
+      "package_url": "pkg:maven/com.microsoft.onnxruntime/onnxruntime@1.11.0",
+      "sha256": "4d0c5620a8d9f1c7dcd4da3be5794ff63604fd5f9dfc8a4df9acaad320836d63",
+      "classification": "false-positive",
+      "reason": "The advisory affects the Python onnx package download_model function, not this Microsoft ONNX Runtime Java artifact.",
+      "evidence": "https://github.com/advisories/GHSA-h36j-8vv3-cj52",
+      "review_by": "2026-12-07",
+      "absent_artifacts": []
+    },
+    {
+      "id": "DC-SPRING-JMS-001",
+      "cve": "CVE-2026-41855",
+      "package_url": "pkg:maven/org.springframework/spring-core@6.1.5",
+      "sha256": "476dac28509b3f47d0b5e895a639fa75ac2218f074ce214e44832a836c469f7e",
+      "classification": "not-applicable",
+      "reason": "The reported dependency graph has no spring-jms module, which contains the affected Jackson JMS converters.",
+      "evidence": "https://spring.io/security/cve-2026-41855/",
+      "review_by": "2026-12-07",
+      "absent_artifacts": ["spring-jms-*.jar"]
+    },
+    {
+      "id": "DC-SPRING-WEBFLUX-001",
+      "cve": "CVE-2026-47891",
+      "package_url": "pkg:maven/org.springframework/spring-core@6.1.5",
+      "sha256": "476dac28509b3f47d0b5e895a639fa75ac2218f074ce214e44832a836c469f7e",
+      "classification": "not-applicable",
+      "reason": "The reported dependency graph has neither Spring WebFlux nor Aalto XML, required by this advisory.",
+      "evidence": "https://spring.io/security/cve-2026-47891/",
+      "review_by": "2026-12-07",
+      "absent_artifacts": ["spring-webflux-*.jar", "aalto-xml-*.jar"]
+    },
+    {
+      "id": "DC-SPRING-WEBFLUX-002",
+      "cve": "CVE-2026-47892",
+      "package_url": "pkg:maven/org.springframework/spring-core@6.1.5",
+      "sha256": "476dac28509b3f47d0b5e895a639fa75ac2218f074ce214e44832a836c469f7e",
+      "classification": "not-applicable",
+      "reason": "The reported dependency graph has no Spring WebFlux module; the affected WebFlux functional endpoints are unavailable.",
+      "evidence": "https://spring.io/security/cve-2026-47892/",
+      "review_by": "2026-12-07",
+      "absent_artifacts": ["spring-webflux-*.jar"]
+    }
+  ]
+}
