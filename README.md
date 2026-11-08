@@ -2,6 +2,8 @@
 
 Backend Java/Spring Boot của Mosquizto. Các bước bên dưới dành cho việc build và chạy ứng dụng trên máy hoặc bằng Docker Compose.
 
+WebSocket notification nhiều instance dùng Redis Pub/Sub; xem [cấu hình, client contract và kiểm thử](docs/websocket-redis.md).
+
 Nếu đang làm phần CI/DevSecOps, bắt đầu từ [hướng dẫn chạy scan và đọc report](security/README.md). [Policy security gate](security/POLICY.md) giải thích vì sao pipeline cho đi tiếp hoặc dừng; [luồng Jenkins và GitOps](docs/pipeline-flow.md) mô tả cách ghép các bước đó vào CI/CD.
 
 Giới thiệu tính năng, API và cấu trúc code: [OVERVIEW.md](OVERVIEW.md).

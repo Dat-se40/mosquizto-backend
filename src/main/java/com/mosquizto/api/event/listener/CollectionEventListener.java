@@ -8,7 +8,7 @@ import com.mosquizto.api.service.NotificationService;
 import com.mosquizto.api.util.NotificationType;
 import com.mosquizto.api.util.NotificationWriter;
 import lombok.RequiredArgsConstructor;
-import org.springframework.context.event.EventListener;
+import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
@@ -19,7 +19,7 @@ public class CollectionEventListener {
     private final NotificationService notificationService;
     private final UserRepository userRepository ;
     @Async
-    @EventListener
+    @TransactionalEventListener(fallbackExecution = true)
     public void handleCollectionShared(CollectionSharedEvent event) {
         mailService.sendCollectionShareInvite(
                 event.targetEmail(), event.targetUsername(), event.inviterName(), event.collectionTitle(), event.role()
@@ -36,7 +36,7 @@ public class CollectionEventListener {
 
     }
     @Async
-    @EventListener
+    @TransactionalEventListener(fallbackExecution = true)
     public void handleCollectionReported(CollectionReportEvent event)
     {
         mailService.sendCollectionReportNotification(event.targetMail(),event.targetUsername(), event.reporterName(),

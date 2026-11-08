@@ -8,7 +8,7 @@ import com.mosquizto.api.service.NotificationService;
 import com.mosquizto.api.util.NotificationType;
 import com.mosquizto.api.util.NotificationWriter;
 import lombok.RequiredArgsConstructor;
-import org.springframework.context.event.EventListener;
+import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
@@ -20,7 +20,7 @@ public class UserEventListener {
     private final UserRepository userRepository;
 
     @Async
-    @EventListener
+    @TransactionalEventListener(fallbackExecution = true)
     public void handleUserFollowed(UserFollowedEvent event) {
         User recipient = this.userRepository.findActiveByUsername(event.targetUsername()).orElse(null);
         if (recipient == null) {
@@ -36,7 +36,7 @@ public class UserEventListener {
     }
 
     @Async
-    @EventListener
+    @TransactionalEventListener(fallbackExecution = true)
     public void handleUserReported(UserReportEvent event) {
         User recipient = this.userRepository.findActiveByUsername(event.targetUsername()).orElse(null);
         if (recipient == null) {

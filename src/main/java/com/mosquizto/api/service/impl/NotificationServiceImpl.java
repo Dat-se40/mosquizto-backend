@@ -4,24 +4,25 @@ import com.mosquizto.api.dto.response.NotificationResponse;
 import com.mosquizto.api.dto.response.PageResponse;
 import com.mosquizto.api.model.Notification;
 import com.mosquizto.api.model.User;
+import com.mosquizto.api.realtime.RedisNotificationBus;
 import com.mosquizto.api.repository.NotificationRepository;
 import com.mosquizto.api.repository.UserRepository;
 import com.mosquizto.api.service.CurrentUserProvider;
 import com.mosquizto.api.service.NotificationService;
 import com.mosquizto.api.util.NotificationType;
 import lombok.AllArgsConstructor;
-import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
+import org.springframework.messaging.simp.SimpMessageType;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.util.Date;
 import java.util.List;
 
 @Slf4j
@@ -30,28 +31,27 @@ import java.util.List;
 public class NotificationServiceImpl implements NotificationService {
 
     private final SimpMessagingTemplate messagingTemplate;
+    private final RedisNotificationBus realtime;
     private final NotificationRepository notificationRepository;
     private final UserRepository userRepository;
     private final CurrentUserProvider currentUserProvider ;
 
     @Override
     public void sendInvitationToSpecificUser(String targetUsername, String message) {
-        this.messagingTemplate.convertAndSendToUser(
+        this.realtime.send(
                 targetUsername,
                 "/queue/invitation",
                 message
         );
-        log.info(message);
     }
 
     @Override
     public void sendReportToSpecificUser(String targetUsername, String message) {
-        this.messagingTemplate.convertAndSendToUser(
+        this.realtime.send(
                 targetUsername,
                 "/queue/report",
                 message
         );
-        log.info(message);
     }
 
     @Override
@@ -68,12 +68,13 @@ public class NotificationServiceImpl implements NotificationService {
         notificationRepository.save(notification);
 
         // 2. Cố gắng push realtime — nếu user offline thì WebSocket tự bỏ qua
-        tryPushRealtime(recipient.getUsername(), NotificationResponse.form(notification));
+        realtime.send(recipient.getUsername(), "/queue/notifications",
+                List.of(NotificationResponse.form(notification)));
     }
 
     @Override
-    @Transactional
-    public void flushUnreadToUser(String username) {
+    @Transactional(readOnly = true)
+    public void flushUnreadToSession(String username, String sessionId) {
         User user = userRepository.findActiveByUsername(username).orElse(null);
         if (user == null) return;
 
@@ -87,10 +88,14 @@ public class NotificationServiceImpl implements NotificationService {
                 .map(NotificationResponse::form)
                 .toList();
 
+        SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor.create(SimpMessageType.MESSAGE);
+        headers.setSessionId(sessionId);
+        headers.setLeaveMutable(true);
         messagingTemplate.convertAndSendToUser(
                 username,
                 "/queue/notifications",
-                payload
+                payload,
+                headers.getMessageHeaders()
         );
     }
 
@@ -149,17 +154,4 @@ public class NotificationServiceImpl implements NotificationService {
         return notificationRepository.countByRecipientIdAndReadFalse(currentUserId);
     }
 
-    private void tryPushRealtime(String username, NotificationResponse payload) {
-        try {
-            messagingTemplate.convertAndSendToUser(
-                    username,
-                    "/queue/notifications",
-                    List.of(payload)
-            );
-            log.info("[Notification] {} with {} to {} ", payload.getId(), payload.getNotificationType(), payload.getRecipientName());
-        } catch (Exception e) {
-            // User offline → bỏ qua, đã có trong DB rồi
-            log.info("[Notification] User {} offline, skipped realtime push", username);
-        }
-    }
 }

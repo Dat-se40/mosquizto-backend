@@ -10,7 +10,7 @@ public interface NotificationService {
     public void sendInvitationToSpecificUser(String targetUsername, String message) ;
     public void sendReportToSpecificUser(String targetUsername, String message) ;
     void sendToUser(User recipient, NotificationType type, String message, Long referenceId);
-    void flushUnreadToUser(String username); // gọi khi user connect WebSocket
+    void flushUnreadToSession(String username, String sessionId);
     PageResponse<NotificationResponse> getMyNotifications(int page, int size);
     void markAsRead(Long notificationId);
     long getUnreadCount();
